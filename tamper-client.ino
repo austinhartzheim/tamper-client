@@ -3,10 +3,11 @@
 #include <stdio.h>
 #include "config.h"
 
-#define STATE_OPEN 0
-#define STATE_CLOSED 1
+enum State {OPEN, TRANSITION1, TRANSITION2, TRANSITION3, CLOSED};
 
-int state = STATE_OPEN;
+State state = OPEN;
+State lastState = OPEN;
+
 int sessionID;
 char urlBuffer[URL_BUFFER_SIZE];
 unsigned long lastPing = millis(); 
@@ -27,6 +28,7 @@ void ping() {
   Serial.println(urlBuffer);
   client.get(urlBuffer);
   sessionID++;
+  lastPing = millis();
 }
 
 void changeLED(int red, int green, int blue) {
@@ -35,40 +37,60 @@ void changeLED(int red, int green, int blue) {
   analogWrite(6, blue);
 }
 
-void loop() {
+void changeState(State newState) {
+  lastState = state;
+  state = newState;
+}
 
-  unsigned long currentTime = millis();
-  
+// returns true if magnet on lid is detected
+bool isMagnetClosed() {
   if (analogRead(A0) > 300) {
-    // open - no magnet
-    changeLED(0, 100, 0);
-    
-    // send alert notification if box is opened
-    if (state == STATE_CLOSED) {
-      client.get(ALERT_URL);
-      while (client.available()) {
-        char c = client.read();
-        Serial.print(c);
-      }
-
-      // updating at the end to detect state transition
-      state = STATE_OPEN;
-      Serial.flush();
-    }
-    
-  } else {
-    // closed - magnet
-    changeLED(100, 0, 0);
-
-    // begin ping notifications when box is locked
-    if ( state == STATE_OPEN || (currentTime-lastPing)>PING_INTERVAL ) {
-      ping();
-      lastPing = currentTime;
-    }
-    
-    // updating at the end to detect state transition
-    state = STATE_CLOSED;
+    return false;
   }
+  return true;
+}
+
+void alarm() {
+  client.get(ALERT_URL);
+    while (client.available()) {
+      client.read();
+    }
+}
+
+void loop() {
   
-  delay(10);
+  switch (state) {
+      case OPEN:
+        changeLED(0, 100, 0);
+        if (isMagnetClosed()) {
+          changeState(TRANSITION1);
+        }
+        break;
+      case TRANSITION1:
+        changeLED(0, 0, 50);
+        if (!isMagnetClosed()) {
+          changeState(TRANSITION2);
+        }
+        break;
+      case TRANSITION2:
+        changeLED(0, 0, 100);
+        if (isMagnetClosed()) {
+          changeState(TRANSITION3);
+        }
+        break;
+      case TRANSITION3:
+        changeLED(100, 0, 0);
+        ping();
+        changeState(CLOSED);      
+        break;
+      case CLOSED:
+        changeLED(100, 0, 0);
+        if (!isMagnetClosed()) {
+          alarm();
+          changeState(OPEN);
+        }
+        break;
+      default:
+      break;
+    }
 }
